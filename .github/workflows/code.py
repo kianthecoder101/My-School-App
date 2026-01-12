@@ -4,6 +4,10 @@ import easyocr
 import numpy as np
 from PIL import Image
 
+conn = st.connection("gsheets", type="gsheets")
+df = conn.read()
+st.dataframe(df)
+
 # 1. SET THE PAGE DESIGN
 st.set_page_config(page_title="Sabah School Scanner", page_icon="🏫")
 st.title("📸 School Pickup Scanner")
