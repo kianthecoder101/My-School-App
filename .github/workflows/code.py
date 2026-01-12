@@ -1,5 +1,4 @@
 import streamlit as st
-from streamlit_gsheets import GSheetsConnection
 import easyocr
 import numpy as np
 from PIL import Image
