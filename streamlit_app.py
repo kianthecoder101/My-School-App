@@ -52,9 +52,6 @@ def fetch_snapshot_http(url: str, timeout: int = 10) -> bytes:
     return resp.content
 
 def fetch_frame_from_rtsp(stream_url: str, timeout_sec: int = 5) -> bytes:
-    """
-    Try to capture one frame from RTSP/stream using OpenCV and return JPEG bytes.
-    """
     try:
         import cv2
     except Exception as e:
@@ -229,21 +226,57 @@ def monitor_loop(stream_url: str, interval_sec: float = 2.0, max_iterations: int
     st.info("Monitoring stopped.")
 
 # -------------------------
-# UI
+# UI: Monitor page with phone camera + QR
 # -------------------------
-def camera_monitor_section():
+def camera_monitor_section(app_url: str):
     st.header("Live monitoring (plates -> announce)")
 
     st.markdown(
-        "Enter your camera's stream URL (RTSP) or a snapshot URL (HTTP). The app will poll the feed, run OCR on frames, "
-        "and, if a recognized plate matches an entry in list.txt, it will create and play an announcement (TTS)."
+        "Use your phone camera (open the app URL on the phone), or connect an outdoor camera via stream/snapshot URL. "
+        "When a plate from list.txt is seen the app will announce it via TTS."
     )
 
-    # ensure state
     ensure_state()
 
+    # Top area: QR + phone camera
+    qr_col, cam_col = st.columns([1, 2])
+    with qr_col:
+        st.subheader("Open on phone")
+        if app_url:
+            qr_url = "https://chart.googleapis.com/chart?chs=300x300&cht=qr&chl=" + urllib.parse.quote(app_url)
+            st.image(qr_url, width=200, caption="Scan to open app on phone")
+            st.markdown(f"[Open on phone]({app_url})")
+            st.caption("If QR doesn't scan, tap the link above on your phone.")
+        else:
+            st.info("Paste your public app URL into the sidebar to enable QR + direct open link.")
+
+        st.markdown(
+            "Tip: if you are testing locally and your phone can't reach your machine, run `ngrok http 8501` and paste the ngrok HTTPS URL here."
+        )
+
+    with cam_col:
+        st.subheader("Phone camera (mobile browsers)")
+        photo = st.camera_input("Take a photo from your phone")
+        if photo:
+            st.image(photo, caption="Captured photo", use_column_width=True)
+            if st.button("Run OCR on phone photo"):
+                with st.spinner("Running OCR..."):
+                    out = ocr_on_image_bytes(photo.getvalue())
+                    if out:
+                        for t in out:
+                            st.write(f"Detected: {t}")
+                            norm = normalize_plate(t)
+                            if norm in st.session_state["plate_list"]:
+                                announce_plate(norm, t)
+                    else:
+                        st.info("No text detected or OCR unavailable.")
+
+    st.markdown("---")
+
+    # Bottom area: IP camera / monitoring controls
     col1, col2 = st.columns([2, 1])
     with col1:
+        st.subheader("IP / Outdoor camera (RTSP or snapshot)")
         stream_url = st.text_input("Camera stream or snapshot URL (rtsp:// or http:// ...):", key="stream_url")
         interval = st.number_input("Polling interval seconds", min_value=1.0, max_value=30.0, value=2.0)
         max_iters = st.number_input("Max iterations (0 = infinite until STOP)", min_value=0, value=0)
@@ -263,7 +296,6 @@ def camera_monitor_section():
                     st.error("Enter a stream/snapshot URL first.")
                 else:
                     st.session_state["monitoring"] = True
-                    # start monitoring (runs in the same request; we use experimental_rerun in loop)
                     monitor_loop(stream_url, interval_sec=interval, max_iterations=int(max_iters))
         else:
             if st.button("STOP monitoring"):
@@ -274,7 +306,6 @@ def camera_monitor_section():
             st.subheader("Last captured frame")
             st.image(st.session_state["last_frame"], use_column_width=True)
 
-        # show announced history
         st.subheader("Recently announced")
         recent = st.session_state["announced"]
         if recent:
@@ -284,14 +315,13 @@ def camera_monitor_section():
             st.write("None yet")
 
     st.markdown("---")
-    st.info(
-        "QR code: ensure your Public app URL (in the sidebar) is a public HTTPS URL. If QR wasn't working, try adding the URL manually "
-        "to your phone browser. You can also use an ngrok HTTPS URL for local testing."
-    )
+    st.info("QR uses the Public app URL from the sidebar. Make sure it is an HTTPS public URL (Streamlit Cloud or ngrok).")
 
+# -------------------------
+# Simple Announcements page
+# -------------------------
 def announcements_page():
     st.header("Announcements (session)")
-    # small reuse of previous announcement UI
     if "announcements" not in st.session_state:
         st.session_state["announcements"] = []
     with st.expander("Create an announcement (session only)"):
@@ -322,26 +352,31 @@ def announcements_page():
     else:
         st.info("No announcements yet.")
 
+# -------------------------
+# Main
+# -------------------------
 def main():
     st.set_page_config(page_title="My School App", layout="wide")
     st.sidebar.title("My School App")
     page = st.sidebar.radio("Go to", ["Monitor (plates)", "Announcements", "Settings"])
-    # app_url usage for QR generation; user should put their public app URL here
     default_app_url = st.secrets.get("app_url", "")
     app_url = st.sidebar.text_input("Public app URL (for QR on phones)", value=default_app_url)
 
-    # show quick link / QR helper
+    # show QR or link in sidebar too for convenience
     if app_url:
         try:
             qr = "https://chart.googleapis.com/chart?chs=300x300&cht=qr&chl=" + urllib.parse.quote(app_url)
             st.sidebar.image(qr, width=150, caption="Scan to open (if your URL is public HTTPS)")
+            st.sidebar.markdown(f"[Open app on phone]({app_url})")
         except Exception:
             st.sidebar.write(f"[Open app on phone]({app_url})")
     else:
         st.sidebar.info("Add your public HTTPS app URL here to enable QR linking to phones (or use ngrok for local tests).")
 
+    ensure_state()
+
     if page == "Monitor (plates)":
-        camera_monitor_section()
+        camera_monitor_section(app_url or "")
     elif page == "Announcements":
         announcements_page()
     else:
@@ -352,7 +387,6 @@ def main():
             f"- Current list.txt present: {'yes' if PLATE_LIST_PATH.exists() else 'no'}"
         )
         st.write("Loaded plates (session):")
-        ensure_state()
         st.write(sorted(st.session_state.get("plate_list", [])))
 
 if __name__ == "__main__":
