@@ -2,5 +2,5 @@ streamlit
 pillow
 numpy
 opencv-python-headless
-gspread
-google-auth
+requests
+gtts
