@@ -1,6 +1,12 @@
 streamlit
 pillow
 numpy
-opencv-python-headless
 requests
 gtts
+opencv-python-headless
+# Optional/production-grade OCR (heavy - includes torch). Install only if host supports it:
+easyocr
+# WebRTC (browser push). Required if you use Browser (webrtc) source:
+streamlit-webrtc
+av
+aiortc
