@@ -149,7 +149,7 @@ def get_published_announcements(include_unpublished=False):
 
 # ---------- UI sections ----------
 def home_section():
-    st.header("Welcome to My School App")
+    st.header("Welcome to the automated student pickup dashboard")
     st.markdown(
         """
         This app combines camera capture, OCR, and announcements with TTS playback.
