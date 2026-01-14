@@ -3,65 +3,39 @@ import io
 import json
 import base64
 import urllib.parse
+from datetime import datetime, timezone
 from PIL import Image
 import numpy as np
 
-# --- Google Sheets (gspread) connection (lazy) ---
+# ---------- Utilities ----------
+def now_utc():
+    return datetime.now(timezone.utc)
+
+def ensure_announcements_state():
+    if "announcements" not in st.session_state:
+        st.session_state["announcements"] = []
+
+def make_card(title, subtitle, body, extra=None):
+    st.markdown("**" + title + "**")
+    if subtitle:
+        st.caption(subtitle)
+    st.write(body)
+    if extra:
+        st.write(extra)
+
+# ---------- Google Sheets placeholder (kept for later) ----------
 def get_gsheets_connection():
-    """
-    Connect to Google Sheets using a service account stored in st.secrets['gcp_service_account'].
-    Accepts dict, JSON string, or base64-encoded JSON string.
-    Returns a gspread client or None on failure.
-    """
-    try:
-        import gspread
-        from google.oauth2.service_account import Credentials
-    except Exception as e:
-        st.warning(f"Missing gspread/google-auth packages: {e}")
-        return None
+    """Placeholder for gspread connection; kept for later integration."""
+    st.info("GSheets integration is currently paused. Add credentials and enable when ready.")
+    return None
 
-    info = st.secrets.get("gcp_service_account")
-    if not info:
-        st.warning("No service account info found in st.secrets['gcp_service_account'].")
-        return None
-
-    service_info = None
-    if isinstance(info, dict):
-        service_info = info
-    else:
-        if isinstance(info, str):
-            try:
-                service_info = json.loads(info)
-            except Exception:
-                try:
-                    decoded = base64.b64decode(info)
-                    service_info = json.loads(decoded)
-                except Exception as e:
-                    st.warning(f"Failed to parse gcp_service_account secret: {e}")
-                    return None
-        else:
-            st.warning("Unrecognized gcp_service_account secret format.")
-            return None
-
-    try:
-        scopes = [
-            "https://www.googleapis.com/auth/spreadsheets",
-            "https://www.googleapis.com/auth/drive",
-        ]
-        creds = Credentials.from_service_account_info(service_info, scopes=scopes)
-        client = gspread.authorize(creds)
-        return client
-    except Exception as e:
-        st.warning(f"Could not create gspread client: {e}")
-        return None
-
-# --- OCR (lazy) ---
+# ---------- OCR (lazy) ----------
 def do_ocr(uploaded_file):
     """Lazy-import easyocr and run OCR on the uploaded image. Returns dict with 'result' or 'error'."""
     try:
         import easyocr
     except Exception as e:
-        return {"error": f"Failed to import OCR libraries: {e}. Consider running OCR locally or using a different OCR backend."}
+        return {"error": f"Failed to import OCR libraries: {e}. Consider running OCR locally or using another OCR backend."}
 
     try:
         if hasattr(uploaded_file, "read"):
@@ -83,9 +57,8 @@ def format_ocr_result(result):
         lines.append({"text": text, "confidence": conf})
     return lines
 
-# --- Camera helpers (lazy imports) ---
+# ---------- Camera helpers (lazy imports) ----------
 def fetch_snapshot_http(url, timeout=10):
-    """Fetch a single image via HTTP(S) (snapshot URL). Returns bytes or raises."""
     try:
         import requests
     except Exception as e:
@@ -95,10 +68,6 @@ def fetch_snapshot_http(url, timeout=10):
     return resp.content
 
 def fetch_frame_from_rtsp(stream_url, timeout_sec=5):
-    """
-    Capture a single frame from a stream URL using OpenCV.
-    Returns JPEG bytes or raises an exception.
-    """
     try:
         import cv2
     except Exception as e:
@@ -109,7 +78,6 @@ def fetch_frame_from_rtsp(stream_url, timeout_sec=5):
         cap.release()
         raise RuntimeError("Unable to open stream URL. Check URL, credentials, and network.")
 
-    # Give the stream a moment to buffer
     import time
     start = time.time()
     frame = None
@@ -123,26 +91,84 @@ def fetch_frame_from_rtsp(stream_url, timeout_sec=5):
     if frame is None:
         raise RuntimeError("Failed to capture a frame from the stream.")
 
-    # Convert BGR to RGB, encode as JPEG bytes
     frame_rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     success, encoded = cv2.imencode(".jpg", frame_rgb)
     if not success:
         raise RuntimeError("Failed to encode frame as JPEG.")
     return encoded.tobytes()
 
-# --- UI ---
-def phone_camera_section(app_url):
-    st.header("Phone camera (mobile)")
-    st.write("Open this app on your phone, then use the camera input below to take a photo from your phone.")
-    # QR code via Google Chart API (no extra dependency)
-    qr_url = "https://chart.googleapis.com/chart?chs=300x300&cht=qr&chl=" + urllib.parse.quote(app_url)
+# ---------- TTS helpers ----------
+def generate_tts_mp3(text, lang="en"):
+    """
+    Generate mp3 bytes from text using gTTS (lazy import).
+    Note: gTTS requires internet access at runtime.
+    """
+    try:
+        from gtts import gTTS
+    except Exception as e:
+        return {"error": f"Missing gTTS package: {e}. Add 'gtts' to requirements."}
+
+    try:
+        tts = gTTS(text=text, lang=lang)
+        bio = io.BytesIO()
+        tts.write_to_fp(bio)
+        bio.seek(0)
+        return {"mp3": bio.read()}
+    except Exception as e:
+        return {"error": f"TTS generation failed: {e}"}
+
+# ---------- Announcements management ----------
+def add_announcement(title, body, author, publish_at=None):
+    ensure_announcements_state()
+    item = {
+        "id": int(datetime.now().timestamp() * 1000),
+        "title": title,
+        "body": body,
+        "author": author,
+        "created_at": datetime.now(timezone.utc).isoformat(),
+        "publish_at": publish_at.isoformat() if publish_at else None,
+    }
+    st.session_state["announcements"].insert(0, item)  # newest first
+    return item
+
+def get_published_announcements(include_unpublished=False):
+    ensure_announcements_state()
+    out = []
+    now = now_utc()
+    for a in st.session_state["announcements"]:
+        if a.get("publish_at"):
+            try:
+                pub = datetime.fromisoformat(a["publish_at"])
+            except Exception:
+                pub = None
+        else:
+            pub = None
+        if include_unpublished or (pub is None or pub <= now):
+            out.append(a)
+    return out
+
+# ---------- UI sections ----------
+def home_section():
+    st.header("Welcome to My School App")
+    st.markdown(
+        """
+        This app combines camera capture, OCR, and announcements with TTS playback.
+        Use the sidebar to navigate:
+        - Camera: connect phone or IP cameras and run OCR
+        - Announcements: create and play announcement audio (TTS)
+        """
+    )
+    st.markdown("Built for quick testing — announcements persist in the session. Connect a real store later (Sheets, DB, S3).")
+
+def camera_section(app_url):
+    st.header("Camera & OCR")
+    st.markdown("Use your phone camera, upload an image, or connect an IP camera stream/snapshot.")
+
     col1, col2 = st.columns([1, 2])
     with col1:
-        st.image(qr_url, width=200, caption="Scan to open app on phone")
-        if st.button("Copy link"):
-            st.write(app_url)  # small fallback - user can copy manually
-    with col2:
-        st.markdown("Or use the built-in camera input (works in mobile browsers):")
+        st.subheader("Phone")
+        qr_url = "https://chart.googleapis.com/chart?chs=300x300&cht=qr&chl=" + urllib.parse.quote(app_url)
+        st.image(qr_url, width=180, caption="Scan to open on phone")
         photo = st.camera_input("Take a photo from your phone")
         if photo:
             st.image(photo, caption="Captured photo", use_column_width=True)
@@ -155,13 +181,9 @@ def phone_camera_section(app_url):
                         formatted = format_ocr_result(out["result"])
                         st.write(formatted)
 
-def ip_camera_section():
-    st.header("IP / Outdoor camera (RTSP / Snapshot URL)")
-    st.write("If your camera provides an RTSP stream (rtsp://...) or a single-image snapshot URL (http://.../snapshot.jpg), enter it here.")
-    stream_url = st.text_input("Stream / snapshot URL (can include credentials in URL)")
-    st.write("Examples: rtsp://user:pass@192.168.1.100:554/stream or http://camera-ip/snapshot.jpg")
-    col1, col2 = st.columns(2)
-    with col1:
+    with col2:
+        st.subheader("IP / Outdoor camera")
+        stream_url = st.text_input("Stream or snapshot URL (RTSP or HTTP JPG):")
         if st.button("Fetch snapshot (HTTP)"):
             if not stream_url:
                 st.error("Enter a snapshot URL first.")
@@ -171,7 +193,7 @@ def ip_camera_section():
                     st.image(img_bytes, caption="Snapshot (HTTP)", use_column_width=True)
                 except Exception as e:
                     st.error(f"HTTP snapshot failed: {e}")
-    with col2:
+
         if st.button("Capture frame from stream (RTSP/HTTP)"):
             if not stream_url:
                 st.error("Enter a stream URL first.")
@@ -181,43 +203,10 @@ def ip_camera_section():
                     st.image(img_bytes, caption="Stream frame", use_column_width=True)
                 except Exception as e:
                     st.error(f"Stream capture failed: {e}")
-    st.markdown(
-        "If your camera cannot be reached directly from this host (e.g., it's behind NAT), consider configuring the camera to push snapshots to a public HTTP endpoint, upload to S3, or use an intermediate device that forwards frames."
-    )
-
-def main():
-    st.title("My School App — Camera + OCR + Sheets")
-    st.markdown("Use your phone camera or connect an outdoor camera via stream URL or snapshot URL.")
-
-    # App URL for QR code — try to guess from request headers/environment where possible; otherwise ask the user.
-    default_app_url = st.secrets.get("app_url") if st.secrets.get("app_url") else ""
-    app_url = st.text_input("App public URL (used for QR code / phone open):", value=default_app_url)
-    if not app_url:
-        st.info("Paste your app's public URL here to enable QR code linking to phone.")
-
-    # Phone camera UI
-    phone_camera_section(app_url or "https://your-app-url.example")
 
     st.divider()
-
-    # IP camera UI
-    ip_camera_section()
-
-    st.divider()
-
-    # Google Sheets connection (kept available)
-    client = get_gsheets_connection()
-    if client:
-        st.success("GSheets connection ready.")
-        st.info("Use client.open_by_key(SHEET_ID) in the console or expand app to read/write sheets.")
-    else:
-        st.info("No GSheets connection available (working offline).")
-
-    st.divider()
-
-    # OCR upload fallback
-    st.header("Upload image for OCR")
-    uploaded = st.file_uploader("Upload an image (if you prefer)", type=["png", "jpg", "jpeg"])
+    st.subheader("Upload image for OCR")
+    uploaded = st.file_uploader("Or upload an image", type=["png", "jpg", "jpeg"])
     if uploaded:
         st.image(uploaded, caption="Uploaded image", use_column_width=True)
         if st.button("Run OCR on uploaded image"):
@@ -231,6 +220,91 @@ def main():
                     st.write("Detected text:")
                     for i, row in enumerate(formatted, start=1):
                         st.write(f"{i}. {row['text']}  —  confidence: {row['confidence']:.2f}")
+
+def announcements_section():
+    st.header("Announcements")
+    st.markdown("Create announcements and generate TTS audio for them. Audio playback requires internet (gTTS).")
+
+    with st.expander("Create a new announcement", expanded=True):
+        title = st.text_input("Title")
+        body = st.text_area("Body", height=120)
+        author = st.text_input("Author (optional)")
+        publish = st.checkbox("Schedule publish time", value=False)
+        publish_at = None
+        if publish:
+            dt = st.date_input("Publish date", value=datetime.now().date())
+            tm = st.time_input("Publish time", value=datetime.now().time().replace(microsecond=0))
+            publish_at = datetime.combine(dt, tm).astimezone(timezone.utc)
+        col1, col2 = st.columns(2)
+        with col1:
+            if st.button("Add announcement"):
+                if not title or not body:
+                    st.error("Title and body are required.")
+                else:
+                    item = add_announcement(title, body, author or "Anonymous", publish_at)
+                    st.success("Announcement added.")
+                    st.experimental_rerun()
+        with col2:
+            if st.button("Clear announcements (session only)"):
+                st.session_state["announcements"] = []
+                st.success("Cleared announcements for this session.")
+                st.experimental_rerun()
+
+    st.divider()
+    show_all = st.checkbox("Show unpublished / future announcements", value=False)
+    announcements = get_published_announcements(include_unpublished=show_all)
+    if not announcements:
+        st.info("No announcements yet.")
+    for a in announcements:
+        with st.container():
+            st.subheader(a["title"])
+            meta = f"By {a.get('author','Anonymous')} — created {a.get('created_at')}"
+            if a.get("publish_at"):
+                meta += f" — publishes {a.get('publish_at')}"
+            st.caption(meta)
+            st.write(a["body"])
+
+            bcol1, bcol2 = st.columns([1, 3])
+            with bcol1:
+                if st.button(f"Play TTS ▶️ (#{a['id']})"):
+                    with st.spinner("Generating audio..."):
+                        tts = generate_tts_mp3(f"{a['title']}. {a['body']}")
+                        if "error" in tts:
+                            st.error(tts["error"])
+                        else:
+                            st.audio(tts["mp3"], format="audio/mp3")
+                            st.download_button(
+                                label="Download MP3",
+                                data=tts["mp3"],
+                                file_name=f"announcement-{a['id']}.mp3",
+                                mime="audio/mpeg",
+                            )
+            with bcol2:
+                st.write("")  # spacing; could add more actions here
+
+    st.divider()
+    if st.button("Download all announcements (JSON)"):
+        ensure_announcements_state()
+        data = json.dumps(st.session_state["announcements"], indent=2)
+        st.download_button("Download JSON", data=data, file_name="announcements.json", mime="application/json")
+
+# ---------- Main app ----------
+def main():
+    st.set_page_config(page_title="My School App", layout="wide")
+    st.sidebar.title("My School App")
+    nav = st.sidebar.radio("Navigate", ["Home", "Camera", "Announcements"])
+
+    default_app_url = st.secrets.get("app_url") if st.secrets.get("app_url") else ""
+    app_url = st.sidebar.text_input("Public app URL (for phone QR)", value=default_app_url)
+
+    if nav == "Home":
+        home_section()
+        st.sidebar.markdown("---")
+        st.sidebar.info("Tip: Use the Camera page for phone and IP camera captures. Create announcements on the Announcements page.")
+    elif nav == "Camera":
+        camera_section(app_url or "https://your-app-url.example")
+    elif nav == "Announcements":
+        announcements_section()
 
 if __name__ == "__main__":
     main()
