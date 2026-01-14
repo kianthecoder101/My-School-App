@@ -10,3 +10,5 @@ easyocr
 streamlit-webrtc
 av
 aiortc
+streamlit-webrtc
+av
