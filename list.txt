@@ -1,0 +1,8 @@
+PlateNumber,StudentName,Class
+SBH1190,Kian Nash,Year 8
+SS4485,John Smith,Year 12
+SAB5260,Joe Tea,Year 3
+SAB6613,Wi For Gat,Year 9
+SBH4821,Sum Wan,KG
+SS2048,Ai Don Noe,Year 2
+SBH2107,Hoo Iz Dere,Year 11
