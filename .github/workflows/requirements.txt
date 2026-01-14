@@ -4,11 +4,11 @@ numpy
 requests
 gtts
 opencv-python-headless
-# Optional/production-grade OCR (heavy - includes torch). Install only if host supports it:
+
+# Optional / heavy OCR (includes torch) — include only if your host supports it
 easyocr
-# WebRTC (browser push). Required if you use Browser (webrtc) source:
+
+# WebRTC (browser push) — required for Browser (webrtc) source
 streamlit-webrtc
 av
 aiortc
-streamlit-webrtc
-av
