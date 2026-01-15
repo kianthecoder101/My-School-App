@@ -9,6 +9,7 @@ from datetime import datetime, timezone, timedelta
 from pathlib import Path
 from PIL import Image
 import numpy as np
+import pandas as pd
 
 # Lazy imports for heavy libs are done where needed.
 
@@ -28,18 +29,19 @@ def normalize_plate(s: str) -> str:
         return ""
     return re.sub(r"[^A-Z0-9]", "", s.upper())
 
-
 def load_plate_list():
     if PLATE_LIST_PATH.exists():
         try:
-            text = PLATE_LIST_PATH.read_text(encoding="utf-8")
-            lines = [normalize_plate(l) for l in text.splitlines() if l.strip()]
-            return set(lines)
+            # Read as CSV and clean up plate numbers
+            df = pd.read_csv(PLATE_LIST_PATH)
+            # Create a dictionary for quick lookup: {PLATE: STUDENT_NAME}
+            mapping = {normalize_plate(str(row['PlateNumber'])): row['StudentName'] 
+                       for _, row in df.iterrows()}
+            return mapping
         except Exception as e:
             st.warning(f"Failed to read {PLATE_LIST_PATH}: {e}")
-            return set()
-    else:
-        return set()
+            return {}
+    return {}
 
 
 # -------------------------
