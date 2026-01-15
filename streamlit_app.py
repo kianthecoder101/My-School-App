@@ -225,7 +225,7 @@ def webrtc_transformer_factory():
     except Exception:
         return None
 
-    class PlateTransformer(VideoTransformerBase):
+    class PlateTransformer(VideoProcessorBase):
         def __init__(self):
             self.reader = None
             self.last_announced = {}
@@ -310,7 +310,7 @@ def camera_monitor_section(app_url: str):
                 else:
                     webrtc_ctx = webrtc_streamer(
                         key="webrtc",
-                        mode="recvonly",
+                        mode=WebRtcMode.SENDRECV,
                         video_transformer_factory=Transformer,
                         media_stream_constraints={"video": True, "audio": False},
                         async_transform=True,
