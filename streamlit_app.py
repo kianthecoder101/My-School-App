@@ -220,7 +220,7 @@ def webrtc_available():
 # Proper transformer subclassing VideoTransformerBase (imported lazily)
 def webrtc_transformer_factory():
     try:
-        from streamlit_webrtc import VideoTransformerBase  # type: ignore
+        from streamlit_webrtc import VideoProcessorBase,WebRtcMode  # type: ignore
         import av  # noqa: F401
     except Exception:
         return None
