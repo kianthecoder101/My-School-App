@@ -151,22 +151,21 @@ def update_plate_list_from_upload(uploaded_file):
 def announce_plate(plate_norm: str, raw_text: str):
     now = now_utc()
     last = st.session_state["announced"].get(plate_norm)
+    
     if last and (now - last) < timedelta(minutes=REANNOUNCE_COOLDOWN_MIN):
         return False, "recently_announced"
-    text = f"Attention. Plate detected: {raw_text}."
+
+    # Lookup student name
+    student_name = st.session_state["plate_list"].get(plate_norm, "Unknown Student")
+    text = f"Attention. {student_name} is being picked up. Plate number {raw_text}."
+    
     tts = generate_tts_mp3_bytes(text)
     if "error" in tts:
         return False, tts["error"]
-    mp3 = tts["mp3"]
+    
     st.session_state["announced"][plate_norm] = now
-    st.success(f"Matched plate: {raw_text}")
-    st.audio(mp3, format="audio/mp3")
-    st.download_button(
-        label=f"Download announcement for {raw_text}",
-        data=mp3,
-        file_name=f"announce-{plate_norm}-{int(now.timestamp())}.mp3",
-        mime="audio/mpeg",
-    )
+    st.success(f"Matched: {student_name} ({raw_text})")
+    st.audio(tts["mp3"], format="audio/mp3", autoplay=True) # Added autoplay
     return True, "ok"
 
 
