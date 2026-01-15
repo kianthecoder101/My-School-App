@@ -9,3 +9,6 @@ streamlit-webrtc
 av
 aiortc
 pandas
+streamlit-webrtc
+aiortc
+av
