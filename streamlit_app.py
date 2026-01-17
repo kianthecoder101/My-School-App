@@ -1,41 +1,82 @@
 import streamlit as st
+import io
 import re
+import time
 import pandas as pd
+from datetime import datetime, timezone
 from pathlib import Path
+from PIL import Image, ImageEnhance
+import numpy as np
 
-# ... (Keep your OCR and Session State logic at the top) ...
+# -------------------------
+# 1. OCR Logic (Defined First)
+# -------------------------
+def perform_ocr(image_np):
+    try:
+        import pytesseract
+        # PSM 7 is for single lines; helps prevent RAM spikes
+        return pytesseract.image_to_string(image_np, config='--psm 7').strip()
+    except Exception as e:
+        return ""
 
+# -------------------------
+# 2. State Management (Defined Second)
+# -------------------------
+def ensure_state():
+    if "detected_log" not in st.session_state:
+        st.session_state["detected_log"] = []
+    
+    if "plate_list" not in st.session_state:
+        plate_file = Path("list.txt")
+        if plate_file.exists():
+            try:
+                df = pd.read_csv(plate_file)
+                # Normalize the plates in the list
+                st.session_state["plate_list"] = {
+                    re.sub(r"[^A-Z0-9]", "", str(row['PlateNumber']).upper()): row['StudentName'] 
+                    for _, row in df.iterrows()
+                }
+            except:
+                st.session_state["plate_list"] = {}
+        else:
+            st.session_state["plate_list"] = {}
+
+# -------------------------
+# 3. Main UI Function
+# -------------------------
 def main():
     st.set_page_config(page_title="Pickup Pro", layout="centered")
+    
+    # Run state check immediately
     ensure_state()
 
     st.title("🚗 School Pickup Scanner")
+    st.write("Point camera at plate and click scan.")
 
-    # --- BUTTON ROW ---
-    # Creating columns to put the Scan button right next to where the camera controls are
-    col_btn1, col_btn2 = st.columns([1, 1])
-    
+    # SIDE-BY-SIDE BUTTONS
+    col_btn1, col_btn2 = st.columns(2)
     with col_btn1:
-        # This button will sit on the left
-        scan_now = st.button("📸 CLICK TO SCAN PLATE", use_container_width=True)
-
+        scan_now = st.button("📸 SCAN PLATE NOW", use_container_width=True)
     with col_btn2:
-        # This acts as a reminder or a "Clear" button to sit next to it
         if st.button("🗑️ Clear Log", use_container_width=True):
             st.session_state["detected_log"] = []
             st.rerun()
 
-    # --- CAMERA SECTION ---
-    from streamlit_webrtc import webrtc_streamer, WebRtcMode
-    
-    ctx = webrtc_streamer(
-        key="integrated-feed",
-        mode=WebRtcMode.SENDRECV,
-        rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
-        media_stream_constraints={"video": True, "audio": False},
-    )
+    # CAMERA FEED
+    try:
+        from streamlit_webrtc import webrtc_streamer, WebRtcMode
+        
+        ctx = webrtc_streamer(
+            key="pickup-cam",
+            mode=WebRtcMode.SENDRECV,
+            rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
+            media_stream_constraints={"video": True, "audio": False},
+        )
+    except Exception as e:
+        st.error(f"Camera Component Error: {e}")
+        return
 
-    # --- SCAN LOGIC ---
+    # SCAN LOGIC
     if scan_now:
         if ctx.video_receiver:
             try:
@@ -43,32 +84,38 @@ def main():
                 if img_frame:
                     img = img_frame.to_ndarray(format="bgr24")
                     
-                    with st.spinner("Processing..."):
-                        import pytesseract
+                    with st.spinner("Analyzing..."):
                         import cv2
-                        # Optimized Grayscale
+                        # Convert to grayscale for Tesseract
                         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-                        text = pytesseract.image_to_string(gray, config='--psm 7').strip()
+                        text = perform_ocr(gray)
                         norm = re.sub(r"[^A-Z0-9]", "", text.upper())
                         
-                        # Show a small preview of the scan
-                        st.image(gray, caption=f"Last Read: {norm}", width=150)
+                        # Show what we scanned
+                        st.image(gray, caption=f"Last Scan: {norm}", width=200)
 
-                        if norm in st.session_state["plate_list"]:
-                            name = st.session_state["plate_list"][norm]
+                        plate_map = st.session_state.get("plate_list", {})
+                        if norm in plate_map:
+                            name = plate_map[norm]
                             st.session_state["detected_log"].insert(0, f"✅ {name} ({norm})")
-                            st.balloons() # Visual celebration for a match!
+                            st.toast(f"Matched {name}!", icon="🎓")
                         else:
-                            st.error(f"No match for: {norm}")
+                            st.warning(f"No match for: {norm}")
+                else:
+                    st.error("Camera is frozen or not sending frames.")
             except Exception as e:
                 st.error(f"Scan failed: {e}")
         else:
-            st.warning("Please click 'Start' on the video feed first!")
+            st.warning("Please click 'Start' on the camera first.")
 
+    # LOG DISPLAY
     st.divider()
     st.subheader("Pickup Queue")
-    for item in st.session_state["detected_log"][:10]:
-        st.write(item)
+    if st.session_state["detected_log"]:
+        for item in st.session_state["detected_log"][:10]:
+            st.write(item)
+    else:
+        st.info("Log is empty.")
 
 if __name__ == "__main__":
     main()
