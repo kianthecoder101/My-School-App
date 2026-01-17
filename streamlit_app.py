@@ -1,64 +1,74 @@
 import streamlit as st
 import re
 import pandas as pd
-from PIL import Image
 from pathlib import Path
 
-# 1. Setup Session State
-if "detected_log" not in st.session_state:
-    st.session_state["detected_log"] = []
-if "plate_list" not in st.session_state:
-    if Path("list.txt").exists():
-        df = pd.read_csv("list.txt")
-        st.session_state["plate_list"] = {
-            re.sub(r"[^A-Z0-9]", "", str(row['PlateNumber']).upper()): row['StudentName'] 
-            for _, row in df.iterrows()
-        }
-    else: st.session_state["plate_list"] = {}
+# ... (Keep your OCR and Session State logic at the top) ...
 
-# 2. UI Layout
-st.title("🚗 Smooth Pickup Scanner")
-st.write("Video should be smooth now. Click 'SCAN' when the car is in view.")
+def main():
+    st.set_page_config(page_title="Pickup Pro", layout="centered")
+    ensure_state()
 
-col1, col2 = st.columns([2, 1])
+    st.title("🚗 School Pickup Scanner")
 
-with col1:
-    # Use WebRTC just for the visual feed (No AI processing in the loop)
-    try:
-        from streamlit_webrtc import webrtc_streamer, WebRtcMode
-        
-        ctx = webrtc_streamer(
-            key="smooth-feed",
-            mode=WebRtcMode.SENDRECV,
-            # We remove the VideoProcessor entirely to keep it fast
-            rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
-            media_stream_constraints={"video": True, "audio": False},
-        )
-    except Exception as e:
-        st.error(f"Camera error: {e}")
+    # --- BUTTON ROW ---
+    # Creating columns to put the Scan button right next to where the camera controls are
+    col_btn1, col_btn2 = st.columns([1, 1])
+    
+    with col_btn1:
+        # This button will sit on the left
+        scan_now = st.button("📸 CLICK TO SCAN PLATE", use_container_width=True)
 
-    # 3. The "Manual Trigger" Button
-    if ctx.video_receiver:
-        if st.button("📸 SCAN PLATE NOW", use_container_width=True):
-            img_frame = ctx.video_receiver.get_frame()
-            if img_frame:
-                img = img_frame.to_ndarray(format="bgr24")
-                
-                # Perform OCR only on command
-                with st.spinner("Reading..."):
-                    import pytesseract
-                    import cv2
-                    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-                    text = pytesseract.image_to_string(gray, config='--psm 7').strip()
-                    norm = re.sub(r"[^A-Z0-9]", "", text.upper())
+    with col_btn2:
+        # This acts as a reminder or a "Clear" button to sit next to it
+        if st.button("🗑️ Clear Log", use_container_width=True):
+            st.session_state["detected_log"] = []
+            st.rerun()
+
+    # --- CAMERA SECTION ---
+    from streamlit_webrtc import webrtc_streamer, WebRtcMode
+    
+    ctx = webrtc_streamer(
+        key="integrated-feed",
+        mode=WebRtcMode.SENDRECV,
+        rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
+        media_stream_constraints={"video": True, "audio": False},
+    )
+
+    # --- SCAN LOGIC ---
+    if scan_now:
+        if ctx.video_receiver:
+            try:
+                img_frame = ctx.video_receiver.get_frame()
+                if img_frame:
+                    img = img_frame.to_ndarray(format="bgr24")
                     
-                    if norm in st.session_state["plate_list"]:
-                        name = st.session_state["plate_list"][norm]
-                        st.session_state["detected_log"].insert(0, f"✅ {name} ({norm})")
-                    else:
-                        st.warning(f"Saw '{norm}' - No match found.")
+                    with st.spinner("Processing..."):
+                        import pytesseract
+                        import cv2
+                        # Optimized Grayscale
+                        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+                        text = pytesseract.image_to_string(gray, config='--psm 7').strip()
+                        norm = re.sub(r"[^A-Z0-9]", "", text.upper())
+                        
+                        # Show a small preview of the scan
+                        st.image(gray, caption=f"Last Read: {norm}", width=150)
 
-with col2:
-    st.subheader("Queue")
+                        if norm in st.session_state["plate_list"]:
+                            name = st.session_state["plate_list"][norm]
+                            st.session_state["detected_log"].insert(0, f"✅ {name} ({norm})")
+                            st.balloons() # Visual celebration for a match!
+                        else:
+                            st.error(f"No match for: {norm}")
+            except Exception as e:
+                st.error(f"Scan failed: {e}")
+        else:
+            st.warning("Please click 'Start' on the video feed first!")
+
+    st.divider()
+    st.subheader("Pickup Queue")
     for item in st.session_state["detected_log"][:10]:
         st.write(item)
+
+if __name__ == "__main__":
+    main()
