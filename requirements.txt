@@ -1,14 +1,9 @@
 streamlit
+pandas
 pillow
 numpy
-requests
-gtts
 opencv-python-headless
-easyocr
+pytesseract
 streamlit-webrtc
 av
 aiortc
-pandas
-streamlit-webrtc
-aiortc
-av
