@@ -10,6 +10,15 @@ from PIL import Image
 import numpy as np
 
 # -------------------------
+# 1. NEW: Model Cache Fix (Prevents NoneType/is_alive errors)
+# -------------------------
+@st.cache_resource
+def get_ocr_reader():
+    import easyocr
+    # Loading the reader here ensures it's ready BEFORE the camera starts
+    return easyocr.Reader(["en"], gpu=False)
+
+# -------------------------
 # Config / helpers
 # -------------------------
 PLATE_LIST_PATH = Path("list.txt")  # Your CSV file
@@ -26,9 +35,7 @@ def normalize_plate(s: str) -> str:
 def load_plate_list():
     if PLATE_LIST_PATH.exists():
         try:
-            # Read as CSV and clean up plate numbers
             df = pd.read_csv(PLATE_LIST_PATH)
-            # Create a dictionary for quick lookup: {PLATE: STUDENT_NAME}
             mapping = {normalize_plate(str(row['PlateNumber'])): row['StudentName'] 
                        for _, row in df.iterrows()}
             return mapping
@@ -36,25 +43,6 @@ def load_plate_list():
             st.warning(f"Failed to read {PLATE_LIST_PATH}: {e}")
             return {}
     return {}
-
-# -------------------------
-# OCR helper
-# -------------------------
-def ocr_on_image_bytes(img_bytes) -> list:
-    try:
-        import easyocr
-    except Exception as e:
-        st.error(f"OCR unavailable (easyocr missing): {e}")
-        return []
-    try:
-        image = Image.open(io.BytesIO(img_bytes)).convert("RGB")
-        image_np = np.array(image)
-        reader = easyocr.Reader(["en"], gpu=False)
-        out = reader.readtext(image_np)
-        return [t for (_b, t, _c) in out]
-    except Exception as e:
-        st.error(f"OCR failed: {e}")
-        return []
 
 # -------------------------
 # Session state
@@ -74,15 +62,15 @@ def ensure_state():
 # -------------------------
 def webrtc_transformer_factory():
     try:
-        from streamlit_webrtc import VideoProcessorBase, WebRtcMode
+        from streamlit_webrtc import VideoProcessorBase
         import av
-        import easyocr
     except Exception:
         return None
 
     class PlateProcessor(VideoProcessorBase):
         def __init__(self):
-            self.reader = easyocr.Reader(["en"], gpu=False)
+            # FIX: Use the cached reader instead of creating a new one
+            self.reader = get_ocr_reader()
             self.last_check = 0
 
         def video_frame_callback(self, frame):
@@ -92,22 +80,26 @@ def webrtc_transformer_factory():
             # Process OCR every 2 seconds to save CPU/Battery
             if curr_time - self.last_check > 2.0:
                 self.last_check = curr_time
-                img_rgb = img[:, :, ::-1]
-                out = self.reader.readtext(img_rgb)
-                
-                for (_bbox, text, _conf) in out:
-                    norm = normalize_plate(text)
-                    plate_map = st.session_state.get("plate_list", {})
+                try:
+                    img_rgb = img[:, :, ::-1]
+                    out = self.reader.readtext(img_rgb)
                     
-                    if norm in plate_map:
-                        now = now_utc()
-                        last = st.session_state["last_seen"].get(norm)
+                    for (_bbox, text, _conf) in out:
+                        norm = normalize_plate(text)
+                        plate_map = st.session_state.get("plate_list", {})
                         
-                        if not last or (now - last).total_seconds() > (REANNOUNCE_COOLDOWN_MIN * 60):
-                            st.session_state["last_seen"][norm] = now
-                            student = plate_map[norm]
-                            entry = {"name": student, "plate": norm, "time": now.strftime("%H:%M:%S")}
-                            st.session_state["detected_log"].insert(0, entry)
+                        if norm in plate_map:
+                            now = now_utc()
+                            last = st.session_state["last_seen"].get(norm)
+                            
+                            if not last or (now - last).total_seconds() > (REANNOUNCE_COOLDOWN_MIN * 60):
+                                st.session_state["last_seen"][norm] = now
+                                student = plate_map[norm]
+                                entry = {"name": student, "plate": norm, "time": now.strftime("%H:%M:%S")}
+                                st.session_state["detected_log"].insert(0, entry)
+                except Exception:
+                    # Ignore background errors to keep the camera feed alive
+                    pass
 
             return av.VideoFrame.from_ndarray(img, format="bgr24")
 
@@ -120,7 +112,9 @@ def camera_monitor_section(app_url: str):
     st.header("Live Monitoring (Silent)")
     ensure_state()
 
-    # QR Code for Phone access
+    # Pre-warm the OCR engine before the camera starts
+    get_ocr_reader()
+
     if app_url:
         qr_url = "https://chart.googleapis.com/chart?chs=300x300&cht=qr&chl=" + urllib.parse.quote(app_url)
         st.image(qr_url, width=150, caption="Scan to open on phone")
@@ -138,8 +132,7 @@ def camera_monitor_section(app_url: str):
                     key="plate-scanner",
                     mode=WebRtcMode.SENDRECV,
                     video_processor_factory=Processor,
-                    async_processing=True,
-                    # FIX: STUN server for connection timeout issues
+                    async_processing=True, # High speed mode
                     rtc_configuration={"iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]},
                     media_stream_constraints={
                         "video": {"width": {"ideal": 640}, "height": {"ideal": 480}},
@@ -176,7 +169,6 @@ def main():
         st.header("Student Database")
         st.write(f"Total students loaded: {len(st.session_state['plate_list'])}")
         
-        # Display the loaded CSV data
         if st.session_state['plate_list']:
             df_display = pd.DataFrame(
                 [(k, v) for k, v in st.session_state['plate_list'].items()],
