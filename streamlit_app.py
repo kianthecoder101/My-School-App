@@ -9,11 +9,12 @@ from PIL import Image, ImageEnhance
 import numpy as np
 
 # -------------------------
-# OCR & Setup
+# OCR Logic (Hardened)
 # -------------------------
 def perform_ocr(image_np):
     try:
         import pytesseract
+        # PSM 7 + OSD 0 is the lightest configuration possible
         return pytesseract.image_to_string(image_np, config='--psm 7').strip()
     except:
         return ""
@@ -38,7 +39,7 @@ def ensure_state():
         st.session_state["last_seen"] = {}
 
 # -------------------------
-# WebRTC Processor
+# WebRTC Factory (Stability Focused)
 # -------------------------
 def webrtc_transformer_factory(sensitivity):
     try:
@@ -55,21 +56,19 @@ def webrtc_transformer_factory(sensitivity):
             img = frame.to_ndarray(format="bgr24")
             curr_time = time.time()
 
-            if curr_time - self.last_check > 3.0:
+            # Check every 4 seconds (Slower check = More stability)
+            if curr_time - self.last_check > 4.0:
                 self.last_check = curr_time
                 try:
-                    # Minimal processing to save RAM
+                    # Resize to tiny dimensions for OCR (Plate only needs small res)
                     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-                    gray = cv2.resize(gray, (480, 320))
-                    pil_img = Image.fromarray(gray)
-                    enhancer = ImageEnhance.Contrast(pil_img)
-                    processed_img = np.array(enhancer.enhance(sensitivity))
+                    small = cv2.resize(gray, (320, 240)) 
                     
-                    text = perform_ocr(processed_img)
+                    text = perform_ocr(small)
                     norm = re.sub(r"[^A-Z0-9]", "", text.upper())
                     
                     plate_map = st.session_state.get("plate_list", {})
-                    if norm in plate_map:
+                    if norm and norm in plate_map:
                         now = datetime.now(timezone.utc)
                         last = st.session_state["last_seen"].get(norm)
                         if not last or (now - last).total_seconds() > 300:
@@ -88,57 +87,37 @@ def main():
     st.set_page_config(page_title="Pickup App", layout="centered")
     ensure_state()
 
-    st.title("🚗 Pickup Scanner")
-    sens = st.sidebar.slider("Sensitivity", 1.0, 3.0, 1.5)
+    st.title("🚗 School Pickup")
+    
+    # 2. Add a Start Button to prevent auto-loading crash
+    run = st.checkbox("Toggle Camera On/Off", value=False)
 
-    # TWO WAYS TO SCAN: Live Video or Photo Capture
-    tab1, tab2 = st.tabs(["Live Scanner", "Manual Photo (Fallback)"])
-
-    with tab1:
-        st.write("If this box disappears, use the 'Manual Photo' tab.")
+    if run:
+        st.info("Loading camera... If it turns black, wait 5 seconds.")
         try:
             from streamlit_webrtc import webrtc_streamer, WebRtcMode
             webrtc_streamer(
-                key=f"scanner-{sens}",
+                key="stable-cam",
                 mode=WebRtcMode.SENDRECV,
-                video_processor_factory=lambda: webrtc_transformer_factory(sens)(),
+                video_processor_factory=lambda: webrtc_transformer_factory(1.5)(),
                 async_processing=True,
-                # STRENGTHENED CONFIG: Adding Twilio or Google Relays
                 rtc_configuration={
-                    "iceServers": [
-                        {"urls": ["stun:stun.l.google.com:19302"]},
-                        {"urls": ["stun:stun1.l.google.com:19302"]}
-                    ]
+                    "iceServers": [{"urls": ["stun:stun.l.google.com:19302"]}]
                 },
                 media_stream_constraints={
-                    "video": {"width": 480, "height": 320, "frameRate": 10},
+                    "video": {"width": 320, "height": 240, "frameRate": 10}, # Ultra low res
                     "audio": False
                 },
             )
         except Exception as e:
-            st.error(f"Live Video Error: {e}")
-
-    with tab2:
-        st.write("Use this if your network blocks live streaming.")
-        img_file = st.camera_input("Take a photo of the plate")
-        if img_file:
-            img = Image.open(img_file).convert('L')
-            enhancer = ImageEnhance.Contrast(img)
-            processed = np.array(enhancer.enhance(sens))
-            text = perform_ocr(processed)
-            norm = re.sub(r"[^A-Z0-9]", "", text.upper())
-            
-            if norm in st.session_state["plate_list"]:
-                name = st.session_state["plate_list"][norm]
-                st.success(f"Matched: {name}")
-                st.session_state["detected_log"].insert(0, {"name": name, "plate": norm, "time": "Now"})
-            else:
-                st.warning(f"Detected '{norm}' but no match in list.txt")
+            st.error(f"Error: {e}")
+    else:
+        st.warning("Camera is currently OFF. Check the box above to start.")
 
     st.divider()
-    st.subheader("Pickup Queue")
+    st.subheader("Queue")
     for item in st.session_state["detected_log"][:5]:
-        st.success(f"**{item['name']}** - {item['plate']} ({item['time']})")
+        st.success(f"**{item['name']}** - {item['plate']}")
 
 if __name__ == "__main__":
     main()
